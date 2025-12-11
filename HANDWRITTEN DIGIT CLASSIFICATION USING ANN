@@ -1,0 +1,159 @@
+import numpy as np
+import pandas as pd
+import time
+import joblib
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+import os
+
+RANDOM_STATE = 42
+np.random.seed(RANDOM_STATE)
+
+# 1) Paths & checks
+DATA_CSV = "digits_dataset.csv"   # make sure this file is in the same folder
+OUT_DIR = "project_outputs"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+if not os.path.exists(DATA_CSV):
+    raise FileNotFoundError(f"{DATA_CSV} not found. Put the CSV in the notebook folder.")
+
+# 2) Load dataset
+df = pd.read_csv(DATA_CSV)
+X = df.drop("label", axis=1).values
+y = df["label"].values
+print(f"Dataset loaded: X shape = {X.shape}, y shape = {y.shape}")
+print(f"Unique labels: {np.unique(y)}\n")
+
+# 3) Train/test split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y
+)
+print("Train/test split:")
+print(" - X_train:", X_train.shape)
+print(" - X_test :", X_test.shape)
+print()
+
+# 4) Scale features (important for MLP)
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Save scaler
+joblib.dump(scaler, os.path.join(OUT_DIR, "scaler.joblib"))
+
+# 5) Build and train MLP
+mlp = MLPClassifier(
+    hidden_layer_sizes=(128, 64),
+    max_iter=200,
+    early_stopping=True,
+    n_iter_no_change=15,
+    learning_rate_init=0.001,
+    verbose=True,
+    random_state=RANDOM_STATE
+)
+
+t0 = time.time()
+mlp.fit(X_train_scaled, y_train)
+t1 = time.time()
+train_time = t1 - t0
+
+print("\nTraining completed in {:.2f} seconds.".format(train_time))
+if hasattr(mlp, "loss_curve_"):
+    print("Training iterations (loss_curve_) length:", len(mlp.loss_curve_))
+
+# 6) Numeric evaluation
+y_pred = mlp.predict(X_test_scaled)
+acc = accuracy_score(y_test, y_pred)
+report = classification_report(y_test, y_pred, digits=4)
+cm = confusion_matrix(y_test, y_pred)
+
+print(f"\nTest Accuracy: {acc:.4f}\n")
+print("Classification Report:\n")
+print(report)
+
+# Save numeric outputs
+with open(os.path.join(OUT_DIR, "classification_report.txt"), "w") as f:
+    f.write(f"Test Accuracy: {acc:.4f}\n\n")
+    f.write("Classification Report:\n")
+    f.write(report)
+
+# 7) Plot: training loss curve (if available)
+plt.figure(figsize=(6,4))
+if hasattr(mlp, "loss_curve_"):
+    plt.plot(mlp.loss_curve_, marker="o")
+    plt.title("MLP Training Loss Curve")
+    plt.xlabel("Iteration")
+    plt.ylabel("Loss")
+    plt.grid(True)
+    loss_png = os.path.join(OUT_DIR, "loss_curve.png")
+    plt.tight_layout()
+    plt.savefig(loss_png, dpi=150)
+    print(f"Saved loss curve to {loss_png}")
+    plt.show()
+else:
+    print("No loss_curve_ attribute available for this model.")
+
+# 8) Plot: normalized confusion matrix
+cm_norm = cm.astype("float") / cm.sum(axis=1)[:, None]
+fig, ax = plt.subplots(figsize=(7,6))
+im = ax.imshow(cm_norm, interpolation="nearest", vmin=0, vmax=1)
+ax.set_title("Normalized Confusion Matrix")
+ax.set_xlabel("Predicted label")
+ax.set_ylabel("True label")
+ax.set_xticks(np.arange(10)); ax.set_yticks(np.arange(10))
+# Add text annotations (two decimal places)
+for i in range(cm_norm.shape[0]):
+    for j in range(cm_norm.shape[1]):
+        text = f"{cm_norm[i,j]:.2f}"
+        ax.text(j, i, text, ha="center", va="center", fontsize=8,
+                color="white" if cm_norm[i,j] > 0.5 else "black")
+fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+cm_png = os.path.join(OUT_DIR, "confusion_matrix.png")
+plt.tight_layout()
+plt.savefig(cm_png, dpi=150)
+print(f"Saved confusion matrix to {cm_png}")
+plt.show()
+
+# Also save raw confusion matrix as csv
+pd.DataFrame(cm).to_csv(os.path.join(OUT_DIR, "confusion_matrix_raw.csv"), index=True, header=True)
+
+# 9) Show sample test images with predictions (8x8 reshape)
+n_show = 12
+indices = np.random.choice(np.arange(len(X_test)), size=n_show, replace=False)
+plt.figure(figsize=(14,3))
+for i, idx in enumerate(indices):
+    ax = plt.subplot(1, n_show, i+1)
+    img = X_test[idx].reshape(8,8)
+    true = y_test[idx]
+    pred = y_pred[idx]
+    ax.imshow(img, cmap="gray", interpolation='nearest')
+    ax.set_title(f"T:{true}  P:{pred}", fontsize=8, color=('green' if true==pred else 'red'))
+    ax.axis('off')
+plt.suptitle("Sample test images — green: correct, red: wrong", fontsize=12)
+sample_png = os.path.join(OUT_DIR, "sample_predictions.png")
+plt.tight_layout(rect=[0,0,1,0.95])
+plt.savefig(sample_png, dpi=150)
+print(f"Saved sample predictions image to {sample_png}")
+plt.show()
+
+# 10) Save model & summary
+joblib.dump(mlp, os.path.join(OUT_DIR, "model.joblib"))
+print("\nSaved model to", os.path.join(OUT_DIR, "model.joblib"))
+
+# Save a small summary file with important numbers
+with open(os.path.join(OUT_DIR, "summary.txt"), "w") as f:
+    f.write("Handwritten Digit Classification - Summary\n")
+    f.write("=========================\n")
+    f.write(f"Dataset file: {DATA_CSV}\n")
+    f.write(f"Train shape: {X_train.shape}\n")
+    f.write(f"Test shape: {X_test.shape}\n")
+    f.write(f"Random state: {RANDOM_STATE}\n")
+    f.write(f"Model: MLPClassifier(hidden_layer_sizes=(128,64))\n")
+    f.write(f"Training time (s): {train_time:.2f}\n")
+    f.write(f"Test Accuracy: {acc:.4f}\n")
+
+print("\nAll outputs saved in folder:", OUT_DIR)
+print("Files saved:", os.listdir(OUT_DIR))
